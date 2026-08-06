@@ -111,15 +111,17 @@ def analyze(path: pathlib.Path) -> dict:
             'count': len(flags), 'flags': flags[:12]}
 
 
-def render(results, out_path: pathlib.Path, roots):
+def render(results, out_path: pathlib.Path, roots, checked=()):
     now = dt.datetime.now().isoformat(timespec='seconds')
+    checked = set(checked)
     rows = []
     for path, res in sorted(results.items()):
         cls = {'FINDINGS': 'bad', 'ERROR': 'err', 'CLEAN': 'ok'}[res['status']]
         detail = html.escape(res.get('detail', '')) or '<br>'.join(
             html.escape(f) for f in res.get('flags', [])) or 'nothing to report'
+        new = '<span class="new">new since last look</span>' if path in checked else ''
         rows.append(
-            f'<tr class="{cls}"><td>{html.escape(pathlib.Path(path).name)}</td>'
+            f'<tr class="{cls}"><td>{html.escape(pathlib.Path(path).name)}{new}</td>'
             f'<td>{res["status"]}</td><td>{detail}</td></tr>')
     findings = sum(1 for r in results.values() if r['status'] == 'FINDINGS')
     errors = sum(1 for r in results.values() if r['status'] == 'ERROR')
@@ -137,6 +139,8 @@ td{{border-top:1px solid #E4DFD1;padding:.55rem .6rem;vertical-align:top}}
 tr.bad td:nth-child(2){{color:#B4452C;font-weight:600}}
 tr.err td:nth-child(2){{color:#8A6A16;font-weight:600}}
 tr.ok td:nth-child(2){{color:#1E7A47}}
+.new{{display:inline-block;margin-left:.5rem;padding:.05rem .38rem;border-radius:.28rem;
+background:#EFE6C8;color:#6B5410;font-size:.72rem;letter-spacing:.02em;vertical-align:.06em}}
 .note{{margin-top:1.6rem;padding:.9rem 1.1rem;border:1px solid #E4DFD1;border-radius:.6rem;
 background:#F4F1E8;color:#5C5645;font-size:.88rem}}</style>
 <h1>What is in your files right now</h1>
@@ -157,6 +161,10 @@ def main(argv=None) -> int:
     ap.add_argument('--state', default='canary-state.json')
     ap.add_argument('--report', default='canary-report.html')
     ap.add_argument('--results', default='canary-results.json')
+    ap.add_argument('--fail-on-findings', dest='fail_on_findings', action='store_true',
+                    help='exit 2 when any watched file has findings. For scheduled runs: a guard '
+                         'nobody hears is not a guard, and a nightly job that always exits 0 '
+                         'teaches its scheduler it never has anything to say')
     a = ap.parse_args(argv)
 
     state_path = pathlib.Path(a.state)
@@ -171,20 +179,40 @@ def main(argv=None) -> int:
         except json.JSONDecodeError:
             prev = {}
 
-    for p in changes:
-        prev[str(p)] = analyze(p)
+    # A file whose last check ERRORED is re-examined even if its bytes did not
+    # move. "We never managed to look at this one" is not a state that resolves
+    # itself by being ignored, and leaving the stale ERROR in place would let
+    # the report keep asserting a status nobody has re-tested in weeks.
+    retries = [k for k, v in prev.items()
+               if v.get('status') == 'ERROR' and k in found]
+    to_check = list(dict.fromkeys([str(p) for p in changes] + retries))
+
+    for key in to_check:
+        prev[key] = analyze(pathlib.Path(key))
     # a file that vanished should stop being reported as if it were still there
     prev = {k: v for k, v in prev.items() if k in found}
+    checked = [k for k in to_check if k in prev]
 
-    render(prev, pathlib.Path(a.report), a.roots)
+    render(prev, pathlib.Path(a.report), a.roots, checked)
     rp.write_text(json.dumps(prev, indent=1), encoding='utf-8')
     state_path.write_text(json.dumps(found, indent=1), encoding='utf-8')
 
     findings = sum(1 for r in prev.values() if r['status'] == 'FINDINGS')
     errors = sum(1 for r in prev.values() if r['status'] == 'ERROR')
-    print(f'canary: {len(changes)} changed, {len(prev)} tracked, '
-          f'{findings} with findings, {errors} uncheckable -> {a.report}')
-    return 1 if errors else 0
+    fresh = sum(1 for k in checked if prev[k]['status'] == 'FINDINGS')
+    print(f'canary: {len(checked)} checked, {len(prev)} tracked, '
+          f'{findings} with findings ({fresh} new), {errors} uncheckable -> {a.report}')
+    # 1 beats 2: a check that could not RUN is a worse state than a check that
+    # ran and found something, because the first hides an unknown number of the
+    # second.
+    if errors:
+        return 1
+    # NEWS, not inventory. The exit code fires on findings in files that were
+    # actually re-examined this run. A known-bad file sitting unchanged is
+    # already in the report; raising the alarm about it again every night is how
+    # a nightly guard teaches its owner to stop reading -- the same muting
+    # failure the claim-audit wrapper avoids from the opposite direction.
+    return 2 if (fresh and a.fail_on_findings) else 0
 
 
 if __name__ == '__main__':
