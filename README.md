@@ -21,9 +21,9 @@ early, while there was still time to walk out.
 > land and asks flatline the moment one changes, so the answer arrives before
 > anyone thinks to ask the question.
 >
-> One commitment binds both, and it is the one to hold us to: **neither will
-> ever report something as fine when it did not actually look.** A check that
-> could not run is reported as a failure to check — never as a pass.
+> **Neither tool will ever call a file clean that it failed to read.** A check
+> that could not run is reported as a failure to check, never as a pass — in
+> code, and with a test, in both tools. Hold us to that one.
 
 ## The problem with every tool like this, including ours
 
