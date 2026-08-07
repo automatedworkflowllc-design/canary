@@ -6,6 +6,25 @@ lands and tells you what is wrong before you thought to ask.**
 Named for the bird. The point was never that it sang — it was that it *stopped*,
 early, while there was still time to walk out.
 
+## Why these tools exist
+
+> **Software fails loudly. Data fails quietly.**
+>
+> A column that stopped updating in March. An export that has been byte-identical
+> for six weeks. A nightly job that has "succeeded" every night into an empty
+> file. Nothing alerts on any of it, because nothing is *broken* — the numbers
+> simply stopped being true, and every dashboard above them kept reporting with
+> complete confidence.
+>
+> **[flatline][] is the judgment**: it decides whether a signal still carries
+> information. **canary is the trigger**: it watches the folders where files
+> land and asks flatline the moment one changes, so the answer arrives before
+> anyone thinks to ask the question.
+>
+> One commitment binds both, and it is the one to hold us to: **neither will
+> ever report something as fine when it did not actually look.** A check that
+> could not run is reported as a failure to check — never as a pass.
+
 ## The problem with every tool like this, including ours
 
 They all wait to be asked. You have to already suspect something is wrong, then
