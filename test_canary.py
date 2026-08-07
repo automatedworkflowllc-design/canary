@@ -47,7 +47,7 @@ def test_error_rows_are_counted_and_surfaced_in_the_report(tmp_path):
                    'b.csv': {'status': 'CLEAN', 'count': 0, 'flags': []}},
                   out, [tmp_path])
     text = out.read_text(encoding='utf-8')
-    assert '1 could not be checked' in text
+    assert 'could not be checked' in text
     assert 'flatline missing' in text
     assert 'is not a pass' in text          # the report explains itself
 
@@ -172,11 +172,49 @@ def test_a_different_package_named_flatline_does_not_count(tmp_path, monkeypatch
     assert 'different package named' in res['detail']
 
 
+def test_a_finding_is_written_for_the_person_who_owns_the_spreadsheet(tmp_path):
+    """"flags: CONSTANT" names a column and a category and leaves the reader to
+    work out whether it matters. The same fact told usefully says what the value
+    is, how many rows, and what it probably means. Only the second gets acted
+    on, and this tool is worth nothing if it is not acted on."""
+    res = canary._summarize(
+        "  !! status: CONSTANT\n"
+        "       identical value 'OPEN' on all 412 rows; carries 0.00 bits\n", 1)
+    assert res['plain'][0]['column'] == 'status'
+    assert "identical value 'OPEN' on all 412 rows" in res['plain'][0]['detail']
+
+    out = tmp_path / 'r.html'
+    canary.render({'invoices.csv': res}, out, [tmp_path])
+    text = out.read_text(encoding='utf-8')
+    assert 'is <code>OPEN</code> on all 412 rows' in text
+    assert 'whatever fills it in has stopped' in text
+
+
+def test_worst_first_and_no_badge_when_it_would_sit_on_every_row(tmp_path):
+    """Two ordering rules. A reader who scrolls past ten rows of "nothing to
+    report" stops opening the report; and a badge on all 32 rows is furniture,
+    which is the always-on-alarm failure committed in the UI instead of the
+    exit code."""
+    results = {
+        'clean.csv': {'status': 'CLEAN', 'count': 0, 'flags': []},
+        'bad.csv': {'status': 'FINDINGS', 'count': 1, 'flags': ['x: CONSTANT']},
+        'broken.csv': {'status': 'ERROR', 'detail': 'locked'},
+    }
+    out = tmp_path / 'r.html'
+    canary.render(results, out, [tmp_path], checked=list(results))
+    text = out.read_text(encoding='utf-8')
+    assert text.index('broken.csv') < text.index('bad.csv') < text.index('clean.csv')
+    assert 'new since last look' not in text, 'a badge on every row says nothing'
+
+    canary.render(results, out, [tmp_path], checked=['bad.csv'])
+    assert 'new since last look' in out.read_text(encoding='utf-8')
+
+
 def test_report_renders_findings_visibly(tmp_path):
     out = tmp_path / 'r.html'
     canary.render({'jobs.csv': {'status': 'FINDINGS', 'count': 2,
                                 'flags': ['!! status: constant value', '!! notes: empty']}},
                   out, [tmp_path])
     text = out.read_text(encoding='utf-8')
-    assert '<b>1</b> with findings' in text
+    assert 'worth a look' in text
     assert 'constant value' in text

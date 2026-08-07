@@ -38,6 +38,7 @@ import html
 import importlib.util
 import json
 import pathlib
+import re
 import subprocess
 import sys
 
@@ -179,11 +180,31 @@ def _summarize(out: str, returncode: int) -> dict:
     """
     if returncode not in (0, 1):
         return {'status': 'ERROR', 'detail': out.strip()[:300] or f'exit {returncode}'}
-    flags = [ln.strip() for ln in out.splitlines()
-             if ln.strip().startswith('!!') or 'ZERO_VARIANCE' in ln
-             or 'constant' in ln.lower() or 'no information' in ln.lower()]
+
+    lines = out.splitlines()
+    flags, plain = [], []
+    for i, raw in enumerate(lines):
+        ln = raw.strip()
+        if not (ln.startswith('!!') or 'ZERO_VARIANCE' in ln
+                or 'constant' in ln.lower() or 'no information' in ln.lower()):
+            continue
+        flags.append(ln)
+        # flatline prints the finding, then explains it on the next line. canary
+        # was keeping the first and discarding the second -- so the report said
+        # "flags: CONSTANT" and dropped "identical value 'OPEN' on all 412 rows",
+        # which is the half a non-engineer can actually act on.
+        why = lines[i + 1].strip() if i + 1 < len(lines) else ''
+        if why.startswith('!!') or ':' in why.split(' ')[0]:
+            why = ''
+        plain.append({'column': _column_of(ln), 'detail': why})
     return {'status': 'FINDINGS' if flags else 'CLEAN',
-            'count': len(flags), 'flags': flags[:12]}
+            'count': len(flags), 'flags': flags[:12], 'plain': plain[:12]}
+
+
+def _column_of(flag_line: str) -> str:
+    """The column name out of a flatline finding line, without its severity mark."""
+    name = flag_line.lstrip('!').strip()
+    return name.split(':')[0].strip() if ':' in name else name
 
 
 def analyze(path: pathlib.Path) -> dict:
@@ -217,21 +238,81 @@ def analyze(path: pathlib.Path) -> dict:
     return _summarize((r.stdout or '') + (r.stderr or ''), r.returncode)
 
 
+_VALUE = re.compile(r"identical value '([^']*)' on all (\d+) rows")
+
+
+def _plain_detail(res: dict) -> str:
+    """A finding written for the person who owns the spreadsheet.
+
+    "flags: CONSTANT" is engineer output: it names a column and a category and
+    leaves the reader to work out whether that matters. The same fact told
+    usefully is "every one of 412 rows says OPEN -- if that is meant to change,
+    whatever fills it in has stopped." Same finding, and only the second one
+    gets acted on.
+    """
+    items = res.get('plain')
+    if not items:
+        flags = res.get('flags') or []
+        return '<br>'.join(html.escape(f) for f in flags) or 'nothing to report'
+
+    out = []
+    for it in items:
+        col = html.escape(it.get('column') or 'a column')
+        m = _VALUE.search(it.get('detail') or '')
+        if m:
+            value, rows = html.escape(m.group(1)) or '(blank)', m.group(2)
+            out.append(f'<b>{col}</b> is <code>{value}</code> on all {rows} rows &mdash; '
+                       f'so it cannot tell you anything. If it is meant to vary, whatever '
+                       f'fills it in has stopped.')
+        else:
+            out.append(f'<b>{col}</b> carries no information &mdash; every row is the same.')
+    return '<br>'.join(out)
+
+
 def render(results, out_path: pathlib.Path, roots, checked=()):
     now = dt.datetime.now().isoformat(timespec='seconds')
     checked = set(checked)
+
+    # A badge on every row distinguishes nothing. On a first run everything is
+    # new, so "new since last look" sits on all 32 rows and becomes furniture --
+    # the same failure as an exit code that always says PROBLEM, committed in
+    # the report instead. It earns its place only when it splits the list.
+    badge_useful = 0 < len(checked & set(results)) < len(results)
+
+    # Worst first, in the order the exit code already ranks them: a file that
+    # could not be checked outranks a finding, because it hides an unknown
+    # number of them. A reader who scrolls past ten rows of "nothing to report"
+    # to reach the problem is a reader who stops opening the report.
+    severity = {'ERROR': 0, 'FINDINGS': 1, 'CLEAN': 2}
+    ordered = sorted(results.items(), key=lambda kv: (severity[kv[1]['status']], kv[0]))
+
+    label = {'FINDINGS': 'WORTH A LOOK', 'ERROR': 'COULD NOT CHECK', 'CLEAN': 'nothing to report'}
     rows = []
-    for path, res in sorted(results.items()):
+    for path, res in ordered:
         cls = {'FINDINGS': 'bad', 'ERROR': 'err', 'CLEAN': 'ok'}[res['status']]
-        detail = html.escape(res.get('detail', '')) or '<br>'.join(
-            html.escape(f) for f in res.get('flags', [])) or 'nothing to report'
-        new = '<span class="new">new since last look</span>' if path in checked else ''
+        detail = html.escape(res.get('detail', '')) or _plain_detail(res)
+        new = ('<span class="new">new since last look</span>'
+               if badge_useful and path in checked else '')
         rows.append(
             f'<tr class="{cls}"><td>{html.escape(pathlib.Path(path).name)}{new}</td>'
-            f'<td>{res["status"]}</td><td>{detail}</td></tr>')
+            f'<td>{label[res["status"]]}</td><td>{detail}</td></tr>')
     findings = sum(1 for r in results.values() if r['status'] == 'FINDINGS')
     errors = sum(1 for r in results.values() if r['status'] == 'ERROR')
     watching = ', '.join(html.escape(str(r)) for r in roots)
+
+    # The one sentence someone reads. It leads with the uncheckable files when
+    # there are any, because a file nobody managed to read is the finding that
+    # hides the others -- and it never says "all clear" over an empty check.
+    if errors:
+        headline = (f'<b>{errors} file(s) could not be checked at all.</b> That is not a pass. '
+                    f'{findings} other file(s) have something worth a look.')
+    elif findings:
+        headline = f'<b>{findings} of {len(results)} file(s) have something worth a look.</b>'
+    elif results:
+        headline = 'Nothing to report in any of these files, as they stand right now.'
+    else:
+        headline = ('No spreadsheets found to check &mdash; which is not the same as '
+                    'nothing being wrong.')
     body = ''.join(rows) or '<tr><td colspan=3>No watched files have changed yet.</td></tr>'
     out_path.write_text(f"""<!doctype html><meta charset=utf8>
 <title>What is in your files right now</title>
@@ -250,14 +331,19 @@ background:#EFE6C8;color:#6B5410;font-size:.72rem;letter-spacing:.02em;vertical-
 .note{{margin-top:1.6rem;padding:.9rem 1.1rem;border:1px solid #E4DFD1;border-radius:.6rem;
 background:#F4F1E8;color:#5C5645;font-size:.88rem}}</style>
 <h1>What is in your files right now</h1>
-<p class="sub">{len(results)} file(s) checked &middot; <b>{findings}</b> with findings &middot;
-{errors} could not be checked &middot; last look {now}</p>
-<table><tr><td><b>file</b></td><td><b>status</b></td><td><b>what</b></td></tr>
+<p class="sub">{headline}</p>
+<p class="sub" style="font-size:.86rem">{len(results)} file(s) checked &middot; last look {now}</p>
+<table><tr><td><b>file</b></td><td><b>status</b></td><td><b>what we found</b></td></tr>
 {body}</table>
-<div class="note"><b>How to read this.</b> Only files whose contents actually changed are
-re-checked &mdash; a file re-saved with identical bytes is not news. A row marked
-<b>could not be checked</b> is not a pass: it means the check failed to run, and that is
-reported rather than counted as clean. Watching: {watching}. Nothing leaves this machine.</div>
+<div class="note"><b>What &ldquo;worth a look&rdquo; means.</b> A column where every row holds the
+same value cannot tell you anything &mdash; and that is normal for some columns and a broken
+process for others. Only you know which. The usual cause worth catching: something upstream
+stopped writing that field, and every report built on it has been quietly wrong since.
+<br><br><b>A row marked &ldquo;could not check&rdquo; is not a pass.</b> It means the check
+never ran, so whatever is wrong in that file is still there and unseen.
+<br><br>Only files whose contents actually changed get re-checked, so this stays quiet until
+something moves. Watching: {watching}. Nothing leaves this machine &mdash; there is no
+account and nowhere to upload to.</div>
 """, encoding='utf-8')
 
 
