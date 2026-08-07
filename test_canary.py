@@ -36,7 +36,7 @@ def test_only_content_changes_count_as_changes(tmp_path):
 def test_a_check_that_could_not_run_is_never_reported_as_clean(tmp_path, monkeypatch):
     """The whole company exists because software reports success while doing
     nothing. canary must not do it."""
-    monkeypatch.setattr(canary, 'FLATLINE', tmp_path / 'nowhere')
+    monkeypatch.setattr(canary, 'flatline_location', lambda: (None, False))
     res = canary.analyze(_csv(tmp_path / 'x.csv', 'a,b\n1,2'))
     assert res['status'] == 'ERROR'
 
@@ -101,7 +101,7 @@ def test_a_file_that_could_not_be_checked_is_retried_next_run(tmp_path, monkeypa
     _csv(d / 'x.csv', 'a,b\n1,2')
     args = [str(d), '--state', str(tmp_path / 's.json'),
             '--report', str(tmp_path / 'r.html'), '--results', str(tmp_path / 'res.json')]
-    monkeypatch.setattr(canary, 'FLATLINE', tmp_path / 'nowhere')
+    monkeypatch.setattr(canary, 'flatline_location', lambda: (None, False))
     assert canary.main(args) == 1
     monkeypatch.undo()
     # bytes never changed, but the file gets looked at again and clears
@@ -114,11 +114,29 @@ def test_an_uncheckable_file_outranks_findings_in_the_exit_code(tmp_path, monkey
     d = tmp_path / 'e'
     d.mkdir()
     _csv(d / 'x.csv', 'a,b\n1,2')
-    monkeypatch.setattr(canary, 'FLATLINE', tmp_path / 'nowhere')
+    monkeypatch.setattr(canary, 'flatline_location', lambda: (None, False))
     rc = canary.main([str(d), '--state', str(tmp_path / 's.json'),
                       '--report', str(tmp_path / 'r.html'),
                       '--results', str(tmp_path / 'res.json'), '--fail-on-findings'])
     assert rc == 1
+
+
+def test_an_installed_flatline_beats_a_sibling_checkout(tmp_path, monkeypatch):
+    """The property that decides whether canary can ship at all. Resolving the
+    analysis by walking to a sibling directory works in exactly one repo layout
+    -- this one -- so an installed flatline has to win, and the sibling path can
+    only ever be a fallback for the tree these two were written in."""
+    monkeypatch.setattr(canary, 'FLATLINE', tmp_path / 'sibling')
+    (tmp_path / 'sibling').mkdir()
+
+    monkeypatch.setattr(canary.importlib.util, 'find_spec', lambda n: object())
+    assert canary.flatline_location() == (None, True), 'installed flatline must win'
+
+    monkeypatch.setattr(canary.importlib.util, 'find_spec', lambda n: None)
+    assert canary.flatline_location() == (str(tmp_path / 'sibling'), True)
+
+    monkeypatch.setattr(canary, 'FLATLINE', tmp_path / 'gone')
+    assert canary.flatline_location() == (None, False)
 
 
 def test_report_renders_findings_visibly(tmp_path):

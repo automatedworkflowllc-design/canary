@@ -35,13 +35,40 @@ import argparse
 import datetime as dt
 import hashlib
 import html
+import importlib.util
 import json
 import pathlib
 import subprocess
 import sys
 
 WATCHED_SUFFIXES = {'.csv', '.tsv'}
+
+# A SIBLING checkout of flatline, if one happens to sit beside this file. That is
+# true inside the repo these two were written in and false everywhere else, which
+# is why it is a fallback rather than the mechanism: a tool that only runs from
+# one directory layout is not a tool anyone else can use. Overridable with
+# --flatline; None means "flatline is installed, just run it".
 FLATLINE = pathlib.Path(__file__).resolve().parents[1] / 'flatline'
+
+
+def flatline_location():
+    """Return (cwd_to_run_from_or_None, found: bool).
+
+    Preference order, where the reasoning matters more than the order: an
+    INSTALLED flatline wins, because that is the only arrangement that works on
+    a machine other than the one these two were written on. A sibling checkout
+    is consulted only if the import fails, so the dev tree keeps working without
+    letting the tool pretend it is releasable.
+
+    Availability is returned rather than discovered inside the subprocess so
+    that "flatline is not here" is a state canary can state plainly -- and so a
+    test can force it without having to uninstall anything.
+    """
+    if importlib.util.find_spec('flatline') is not None:
+        return None, True
+    if FLATLINE.is_dir():
+        return str(FLATLINE), True
+    return None, False
 
 
 def _sha256(p: pathlib.Path) -> str:
@@ -96,9 +123,18 @@ def analyze(path: pathlib.Path) -> dict:
     "no findings" when it never checked is the exact failure this company exists
     to catch.
     """
+    cwd, found = flatline_location()
+    if not found:
+        # Name the actual remedy instead of echoing a traceback. This is the one
+        # failure a new user will hit, and "could not be checked" with no cause
+        # is the sort of dead end that gets a tool deleted rather than fixed.
+        return {'status': 'ERROR',
+                'detail': 'flatline is not installed and no sibling checkout was found. '
+                          'canary does not do the analysis itself -- install flatline, or '
+                          'pass --flatline pointing at a checkout of it.'}
     try:
         r = subprocess.run([sys.executable, '-m', 'flatline', 'scan', str(path)],
-                           cwd=str(FLATLINE), capture_output=True, text=True, timeout=120)
+                           cwd=cwd, capture_output=True, text=True, timeout=120)
     except Exception as e:                                    # noqa: BLE001
         return {'status': 'ERROR', 'detail': f'could not run flatline: {e}'}
     out = (r.stdout or '') + (r.stderr or '')
@@ -161,11 +197,18 @@ def main(argv=None) -> int:
     ap.add_argument('--state', default='canary-state.json')
     ap.add_argument('--report', default='canary-report.html')
     ap.add_argument('--results', default='canary-results.json')
+    ap.add_argument('--flatline', metavar='DIR',
+                    help='path to a flatline checkout, if it is not installed. canary does not '
+                         'do the analysis itself -- it calls flatline, so that there is one '
+                         'checker rather than two that drift apart')
     ap.add_argument('--fail-on-findings', dest='fail_on_findings', action='store_true',
                     help='exit 2 when any watched file has findings. For scheduled runs: a guard '
                          'nobody hears is not a guard, and a nightly job that always exits 0 '
                          'teaches its scheduler it never has anything to say')
     a = ap.parse_args(argv)
+    if a.flatline:
+        global FLATLINE
+        FLATLINE = pathlib.Path(a.flatline).resolve()
 
     state_path = pathlib.Path(a.state)
     state = load_state(state_path)
