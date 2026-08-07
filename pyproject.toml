@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+# NOT "canary": that name belongs to an unrelated project on PyPI (an exception
+# shipper by Ryan Petrello), as do "flatline", "attest" and "watchpost". This
+# distribution is namespaced so it can never be confused with someone else's
+# work, or quietly shadow it on a machine that has both.
+name = "awllc-canary"
+version = "0.1.0"
+description = "Watches the folders where exports get saved and checks each changed file as it lands, so the answer arrives before anyone thinks to ask the question."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "Automated Workflow" }]
+keywords = ["csv", "data-quality", "spreadsheet", "silent-failure", "monitoring", "watcher"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: System Administrators",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Topic :: System :: Monitoring",
+    "Topic :: Office/Business",
+]
+
+# flatline is deliberately NOT listed as a dependency. It is not on PyPI under
+# that name -- the name is taken by an unrelated Ghidra tool -- so declaring it
+# would install a stranger's package, which canary would then try to run. See
+# the README: install flatline from its repository, or pass --flatline.
+dependencies = []
+
+[project.urls]
+Homepage = "https://automatedworkflowllc.com/"
+Flatline = "https://github.com/automatedworkflowllc-design/flatline"
+
+[project.scripts]
+canary = "canary:main"
+
+[tool.setuptools]
+py-modules = ["canary"]

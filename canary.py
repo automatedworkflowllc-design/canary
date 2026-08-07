@@ -51,6 +51,26 @@ WATCHED_SUFFIXES = {'.csv', '.tsv'}
 FLATLINE = pathlib.Path(__file__).resolve().parents[1] / 'flatline'
 
 
+# Files that identify OUR flatline. The name is taken on PyPI by an unrelated
+# project (a Ghidra decompiler wrapper), so "a module named flatline is
+# importable" is not the same claim as "the checker canary delegates to is here".
+# Getting that wrong would have canary shell out to a stranger's package and
+# report the confusion as a failed check.
+_FLATLINE_MARKERS = ('signals.py', 'jobs.py', 'code.py')
+
+
+def _is_our_flatline(spec) -> bool:
+    """Identify the package by its files, without importing it.
+
+    Deliberately filesystem inspection rather than an import: verifying identity
+    must not execute third-party code that merely happens to share a name.
+    """
+    for loc in list(getattr(spec, 'submodule_search_locations', None) or []):
+        if all((pathlib.Path(loc) / m).exists() for m in _FLATLINE_MARKERS):
+            return True
+    return False
+
+
 def flatline_location():
     """Return (cwd_to_run_from_or_None, found: bool).
 
@@ -64,9 +84,13 @@ def flatline_location():
     that "flatline is not here" is a state canary can state plainly -- and so a
     test can force it without having to uninstall anything.
     """
-    if importlib.util.find_spec('flatline') is not None:
+    try:
+        spec = importlib.util.find_spec('flatline')
+    except (ImportError, ValueError):
+        spec = None
+    if spec is not None and _is_our_flatline(spec):
         return None, True
-    if FLATLINE.is_dir():
+    if FLATLINE.is_dir() and all((FLATLINE / 'flatline' / m).exists() for m in _FLATLINE_MARKERS):
         return str(FLATLINE), True
     return None, False
 
@@ -128,10 +152,13 @@ def analyze(path: pathlib.Path) -> dict:
         # Name the actual remedy instead of echoing a traceback. This is the one
         # failure a new user will hit, and "could not be checked" with no cause
         # is the sort of dead end that gets a tool deleted rather than fixed.
+        clash = importlib.util.find_spec('flatline') is not None
         return {'status': 'ERROR',
-                'detail': 'flatline is not installed and no sibling checkout was found. '
-                          'canary does not do the analysis itself -- install flatline, or '
-                          'pass --flatline pointing at a checkout of it.'}
+                'detail': ('a different package named "flatline" is installed -- the name is '
+                           'taken on PyPI by an unrelated project. canary needs THIS flatline: '
+                           'pass --flatline pointing at a checkout of it.') if clash else
+                          ('flatline was not found. canary does not do the analysis itself -- '
+                           'install flatline, or pass --flatline pointing at a checkout of it.')}
     try:
         r = subprocess.run([sys.executable, '-m', 'flatline', 'scan', str(path)],
                            cwd=cwd, capture_output=True, text=True, timeout=120)

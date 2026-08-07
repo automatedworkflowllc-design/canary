@@ -129,7 +129,20 @@ def test_an_installed_flatline_beats_a_sibling_checkout(tmp_path, monkeypatch):
     monkeypatch.setattr(canary, 'FLATLINE', tmp_path / 'sibling')
     (tmp_path / 'sibling').mkdir()
 
-    monkeypatch.setattr(canary.importlib.util, 'find_spec', lambda n: object())
+    def _pkg(root):
+        (root / 'flatline').mkdir(parents=True)
+        for m in canary._FLATLINE_MARKERS:
+            (root / 'flatline' / m).touch()
+        return root
+
+    class _Spec:
+        def __init__(self, loc): self.submodule_search_locations = [str(loc)]
+
+    _pkg(tmp_path / 'sibling')
+    ours = _Spec(tmp_path / 'installed' / 'flatline')
+    _pkg(tmp_path / 'installed')
+
+    monkeypatch.setattr(canary.importlib.util, 'find_spec', lambda n: ours)
     assert canary.flatline_location() == (None, True), 'installed flatline must win'
 
     monkeypatch.setattr(canary.importlib.util, 'find_spec', lambda n: None)
@@ -137,6 +150,26 @@ def test_an_installed_flatline_beats_a_sibling_checkout(tmp_path, monkeypatch):
 
     monkeypatch.setattr(canary, 'FLATLINE', tmp_path / 'gone')
     assert canary.flatline_location() == (None, False)
+
+
+def test_a_different_package_named_flatline_does_not_count(tmp_path, monkeypatch):
+    """The name is taken on PyPI by an unrelated project. "Importable" is not
+    "this is the checker canary delegates to", and believing otherwise would
+    have canary shell out to a stranger's package and blame the result."""
+    imposter = tmp_path / 'ghidra_thing' / 'flatline'
+    imposter.mkdir(parents=True)
+    (imposter / '__init__.py').touch()          # a real package, wrong one
+
+    class _Spec:
+        submodule_search_locations = [str(imposter)]
+
+    monkeypatch.setattr(canary, 'FLATLINE', tmp_path / 'no-sibling')
+    monkeypatch.setattr(canary.importlib.util, 'find_spec', lambda n: _Spec())
+    assert canary.flatline_location() == (None, False)
+
+    res = canary.analyze(_csv(tmp_path / 'x.csv', 'a,b\n1,2'))
+    assert res['status'] == 'ERROR'
+    assert 'different package named' in res['detail']
 
 
 def test_report_renders_findings_visibly(tmp_path):
