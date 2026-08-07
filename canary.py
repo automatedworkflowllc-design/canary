@@ -139,6 +139,53 @@ def changed_files(roots, state: dict):
     return changes, found
 
 
+def _analyze_frozen(path: pathlib.Path) -> dict:
+    """Run flatline inside this process, for the bundled single-file app.
+
+    A frozen build has no Python interpreter to spawn: sys.executable IS this
+    application, so the normal `python -m flatline` subprocess would relaunch
+    canary rather than run the checker.
+
+    So it calls flatline's OWN cli.main and captures what that prints -- the
+    same code path, producing the same text this module already parses. The
+    alternative was reimplementing the analysis for the packaged build, which
+    would put two checkers in the product and guarantee they drift; that is the
+    single thing canary was built not to do.
+    """
+    import contextlib
+    import io
+    try:
+        from flatline import cli
+    except Exception as e:                                    # noqa: BLE001
+        return {'status': 'ERROR', 'detail': f'flatline is not bundled in this build: {e}'}
+    buf = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
+            rc = cli.main(['scan', str(path)])
+    except SystemExit as e:
+        rc = e.code if isinstance(e.code, int) else 1
+    except Exception as e:                                    # noqa: BLE001
+        return {'status': 'ERROR', 'detail': f'flatline failed on this file: {e}'}
+    return _summarize(buf.getvalue(), rc)
+
+
+def _summarize(out: str, returncode: int) -> dict:
+    """Turn flatline's printed output into canary's small summary.
+
+    Shared by both paths on purpose. If the packaged build and the installed
+    build read the same output differently, the product and the tool stop
+    agreeing about the same file, which is the drift this design exists to
+    prevent.
+    """
+    if returncode not in (0, 1):
+        return {'status': 'ERROR', 'detail': out.strip()[:300] or f'exit {returncode}'}
+    flags = [ln.strip() for ln in out.splitlines()
+             if ln.strip().startswith('!!') or 'ZERO_VARIANCE' in ln
+             or 'constant' in ln.lower() or 'no information' in ln.lower()]
+    return {'status': 'FINDINGS' if flags else 'CLEAN',
+            'count': len(flags), 'flags': flags[:12]}
+
+
 def analyze(path: pathlib.Path) -> dict:
     """Run flatline's scan over one file and return a small summary.
 
@@ -147,6 +194,9 @@ def analyze(path: pathlib.Path) -> dict:
     "no findings" when it never checked is the exact failure this company exists
     to catch.
     """
+    if getattr(sys, 'frozen', False):
+        return _analyze_frozen(path)
+
     cwd, found = flatline_location()
     if not found:
         # Name the actual remedy instead of echoing a traceback. This is the one
@@ -164,14 +214,7 @@ def analyze(path: pathlib.Path) -> dict:
                            cwd=cwd, capture_output=True, text=True, timeout=120)
     except Exception as e:                                    # noqa: BLE001
         return {'status': 'ERROR', 'detail': f'could not run flatline: {e}'}
-    out = (r.stdout or '') + (r.stderr or '')
-    if r.returncode not in (0, 1):
-        return {'status': 'ERROR', 'detail': out.strip()[:300] or f'exit {r.returncode}'}
-    flags = [ln.strip() for ln in out.splitlines()
-             if ln.strip().startswith('!!') or 'ZERO_VARIANCE' in ln
-             or 'constant' in ln.lower() or 'no information' in ln.lower()]
-    return {'status': 'FINDINGS' if flags else 'CLEAN',
-            'count': len(flags), 'flags': flags[:12]}
+    return _summarize((r.stdout or '') + (r.stderr or ''), r.returncode)
 
 
 def render(results, out_path: pathlib.Path, roots, checked=()):
