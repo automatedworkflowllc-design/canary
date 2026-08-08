@@ -148,6 +148,9 @@ They share one hash chain and one signature implementation, imported rather
 than copied — two versions of a trust primitive diverge the first time only one
 gets fixed.
 
+**[Why there are several of these, and when we will delete one](https://github.com/automatedworkflowllc-design/attest/blob/HEAD/WHY-SEVERAL-TOOLS.md)** — the rule each tool had to pass to exist, the one
+overlap that is real, and the date we have committed to settling it.
+
 [attest]: https://github.com/automatedworkflowllc-design/attest
 [flatline]: https://github.com/automatedworkflowllc-design/flatline
 [watchpost]: https://github.com/automatedworkflowllc-design/watchpost
