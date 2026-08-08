@@ -132,10 +132,28 @@ must be retried rather than left asserting a stale status, a repeat finding must
 not re-raise the alarm, and a different package named `flatline` must not be
 mistaken for this one.
 
+## The other three
+
+Four small tools, one idea: **software reports success while doing nothing, and
+nobody notices for months.** Each answers a different question, and each says
+plainly what it cannot see.
+
+| tool | the question it answers | its blind spot |
+|---|---|---|
+| [attest][] | did this job run, and did it produce what it claimed? | it sees declared outputs, not whether they are *correct* |
+| [flatline][] | is this data still carrying information? | it waits to be asked |
+| [watchpost][] | did an output go stale between runs? | it watches files, not the work that made them |
+
+They share one hash chain and one signature implementation, imported rather
+than copied — two versions of a trust primitive diverge the first time only one
+gets fixed.
+
+[attest]: https://github.com/automatedworkflowllc-design/attest
+[flatline]: https://github.com/automatedworkflowllc-design/flatline
+[watchpost]: https://github.com/automatedworkflowllc-design/watchpost
+
+
 ---
 
 MIT. Built by [Automated Workflow](https://automatedworkflowllc.com).
 
-[flatline]: https://github.com/automatedworkflowllc-design/flatline
-[attest]: https://github.com/automatedworkflowllc-design/attest
-[watchpost]: https://github.com/automatedworkflowllc-design/watchpost
