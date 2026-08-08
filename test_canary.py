@@ -210,6 +210,43 @@ def test_worst_first_and_no_badge_when_it_would_sit_on_every_row(tmp_path):
     assert 'new since last look' in out.read_text(encoding='utf-8')
 
 
+def test_expected_constant_columns_are_set_aside_but_never_silently(tmp_path):
+    """The feature that decides whether anyone keeps using this. On a real
+    folder two columns produced two thirds of every finding and both are
+    constant by design -- nothing in the data can say so, only the owner can.
+
+    The hard rule: setting a finding aside is not the same as hiding it. A
+    checker that quietly stops mentioning things is the failure this tool
+    exists to catch, so the count and the column names stay in the report."""
+    results = {
+        'a.csv': {'status': 'FINDINGS', 'count': 2, 'flags': ['ruleset: CONSTANT', 'paid: CONSTANT'],
+                  'plain': [{'column': 'ruleset', 'detail': ''}, {'column': 'paid', 'detail': ''}]},
+        'b.csv': {'status': 'FINDINGS', 'count': 1, 'flags': ['regime: CONSTANT'],
+                  'plain': [{'column': 'regime', 'detail': ''}]},
+    }
+    canary._apply_ignore(results, ['ruleset', 'REGIME'])       # case-insensitive
+
+    assert results['a.csv']['status'] == 'FINDINGS'            # 'paid' still stands
+    assert results['a.csv']['hidden'] == ['ruleset']
+    assert results['b.csv']['status'] == 'CLEAN'               # nothing left to raise
+    assert results['b.csv']['hidden'] == ['regime']
+
+    out = tmp_path / 'r.html'
+    canary.render(results, out, [tmp_path], ignore_path=tmp_path / 'canary-ignore.txt')
+    text = out.read_text(encoding='utf-8')
+    assert 'hidden as expected-constant: ruleset' in text
+    assert 'hidden as expected-constant: regime' in text
+    assert 'canary-ignore.txt' in text, 'the report must say how to change this'
+
+
+def test_the_ignore_file_tolerates_comments_and_blank_lines(tmp_path):
+    p = tmp_path / 'canary-ignore.txt'
+    p.write_text('# columns that are meant to be constant\n\nruleset  # version\n\nregime\n',
+                 encoding='utf-8')
+    assert canary._load_ignore(p) == ['ruleset', 'regime']
+    assert canary._load_ignore(tmp_path / 'nope.txt') == []
+
+
 def test_report_renders_findings_visibly(tmp_path):
     out = tmp_path / 'r.html'
     canary.render({'jobs.csv': {'status': 'FINDINGS', 'count': 2,

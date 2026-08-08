@@ -201,6 +201,56 @@ def _summarize(out: str, returncode: int) -> dict:
             'count': len(flags), 'flags': flags[:12], 'plain': plain[:12]}
 
 
+def _load_ignore(path: pathlib.Path) -> list:
+    """Columns the owner has said are supposed to be constant.
+
+    Without this the tool is correct and unusable. On a real folder, two
+    columns -- a ruleset version and a regime code -- produced two thirds of
+    every finding, and both are constant BY DESIGN. Nothing in the data can
+    tell canary that; only the person who owns the spreadsheet knows. So they
+    say it once, in a plain text file they can read and edit.
+
+    Deliberately not a silent filter. Hidden findings are counted and named in
+    the report, because a checker that quietly stops mentioning things is the
+    exact failure this tool is pointed at.
+    """
+    if not path.exists():
+        return []
+    out = []
+    for line in path.read_text(encoding='utf-8').splitlines():
+        name = line.split('#', 1)[0].strip()
+        if name:
+            out.append(name)
+    return out
+
+
+def _apply_ignore(results: dict, ignore) -> None:
+    """Move findings on expected-constant columns aside, in place.
+
+    A file whose every finding is ignored reads as clean but carries the count,
+    so the report can say what was set aside rather than pretend it never
+    existed.
+    """
+    names = {n.lower() for n in ignore}
+    if not names:
+        return
+    for res in results.values():
+        if res.get('status') != 'FINDINGS':
+            continue
+        plain = res.get('plain') or []
+        keep = [p for p in plain if (p.get('column') or '').lower() not in names]
+        hide = [p['column'] for p in plain if (p.get('column') or '').lower() in names]
+        if not hide:
+            continue
+        res['plain'] = keep
+        res['flags'] = [f for f in (res.get('flags') or [])
+                        if _column_of(f).lower() not in names]
+        res['hidden'] = hide
+        res['count'] = len(keep)
+        if not keep:
+            res['status'] = 'CLEAN'
+
+
 def _column_of(flag_line: str) -> str:
     """The column name out of a flatline finding line, without its severity mark."""
     name = flag_line.lstrip('!').strip()
@@ -269,7 +319,7 @@ def _plain_detail(res: dict) -> str:
     return '<br>'.join(out)
 
 
-def render(results, out_path: pathlib.Path, roots, checked=()):
+def render(results, out_path: pathlib.Path, roots, checked=(), ignore_path=None):
     now = dt.datetime.now().isoformat(timespec='seconds')
     checked = set(checked)
 
@@ -291,6 +341,10 @@ def render(results, out_path: pathlib.Path, roots, checked=()):
     for path, res in ordered:
         cls = {'FINDINGS': 'bad', 'ERROR': 'err', 'CLEAN': 'ok'}[res['status']]
         detail = html.escape(res.get('detail', '')) or _plain_detail(res)
+        if res.get('hidden'):
+            cols = ', '.join(html.escape(c) for c in sorted(set(res['hidden'])))
+            detail += (f'<br><span class="hid">{len(res["hidden"])} finding(s) hidden as '
+                       f'expected-constant: {cols}</span>')
         new = ('<span class="new">new since last look</span>'
                if badge_useful and path in checked else '')
         rows.append(
@@ -299,6 +353,14 @@ def render(results, out_path: pathlib.Path, roots, checked=()):
     findings = sum(1 for r in results.values() if r['status'] == 'FINDINGS')
     errors = sum(1 for r in results.values() if r['status'] == 'ERROR')
     watching = ', '.join(html.escape(str(r)) for r in roots)
+
+    hidden_total = sum(len(r.get('hidden') or []) for r in results.values())
+    where = html.escape(str(ignore_path)) if ignore_path else 'canary-ignore.txt'
+    hidden_note = (
+        f'<b>{hidden_total} finding(s) are already being set aside</b> for you; add or remove '
+        f'column names in <code>{where}</code>, one per line.'
+        if hidden_total else
+        f'To silence one, put its column name in <code>{where}</code>, one per line.')
 
     # The one sentence someone reads. It leads with the uncheckable files when
     # there are any, because a file nobody managed to read is the finding that
@@ -326,6 +388,7 @@ td{{border-top:1px solid #E4DFD1;padding:.55rem .6rem;vertical-align:top}}
 tr.bad td:nth-child(2){{color:#B4452C;font-weight:600}}
 tr.err td:nth-child(2){{color:#8A6A16;font-weight:600}}
 tr.ok td:nth-child(2){{color:#1E7A47}}
+.hid{{color:#8A6A16;font-size:.85em}}
 .new{{display:inline-block;margin-left:.5rem;padding:.05rem .38rem;border-radius:.28rem;
 background:#EFE6C8;color:#6B5410;font-size:.72rem;letter-spacing:.02em;vertical-align:.06em}}
 .note{{margin-top:1.6rem;padding:.9rem 1.1rem;border:1px solid #E4DFD1;border-radius:.6rem;
@@ -341,6 +404,10 @@ process for others. Only you know which. The usual cause worth catching: somethi
 stopped writing that field, and every report built on it has been quietly wrong since.
 <br><br><b>A row marked &ldquo;could not check&rdquo; is not a pass.</b> It means the check
 never ran, so whatever is wrong in that file is still there and unseen.
+<br><br><b>Some of these are supposed to be constant.</b> A version number, a region code, a
+status that only ever means one thing for you. {hidden_note} canary cannot know which columns
+those are &mdash; only you can &mdash; so tell it once and it will set them aside, while still
+counting and naming them here rather than pretending they were never found.
 <br><br>Only files whose contents actually changed get re-checked, so this stays quiet until
 something moves. Watching: {watching}. Nothing leaves this machine &mdash; there is no
 account and nowhere to upload to.</div>
@@ -357,6 +424,10 @@ def main(argv=None) -> int:
                     help='path to a flatline checkout, if it is not installed. canary does not '
                          'do the analysis itself -- it calls flatline, so that there is one '
                          'checker rather than two that drift apart')
+    ap.add_argument('--ignore', action='append', default=[], metavar='COLUMN',
+                    help='a column that is SUPPOSED to be the same on every row (repeatable, or '
+                         'comma-separated). Also read from canary-ignore.txt beside the state '
+                         'file. Hidden findings are still counted and named in the report')
     ap.add_argument('--fail-on-findings', dest='fail_on_findings', action='store_true',
                     help='exit 2 when any watched file has findings. For scheduled runs: a guard '
                          'nobody hears is not a guard, and a nightly job that always exits 0 '
@@ -392,7 +463,13 @@ def main(argv=None) -> int:
     prev = {k: v for k, v in prev.items() if k in found}
     checked = [k for k in to_check if k in prev]
 
-    render(prev, pathlib.Path(a.report), a.roots, checked)
+    ignore_path = state_path.parent / 'canary-ignore.txt'
+    ignore = _load_ignore(ignore_path)
+    for chunk in a.ignore:
+        ignore.extend(n.strip() for n in chunk.split(',') if n.strip())
+    _apply_ignore(prev, ignore)
+
+    render(prev, pathlib.Path(a.report), a.roots, checked, ignore_path)
     rp.write_text(json.dumps(prev, indent=1), encoding='utf-8')
     state_path.write_text(json.dumps(found, indent=1), encoding='utf-8')
 
