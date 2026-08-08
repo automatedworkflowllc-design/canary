@@ -132,9 +132,9 @@ must be retried rather than left asserting a stale status, a repeat finding must
 not re-raise the alarm, and a different package named `flatline` must not be
 mistaken for this one.
 
-## The other three
+## The other four
 
-Four small tools, one idea: **software reports success while doing nothing, and
+Five small tools, one idea: **software reports success while doing nothing, and
 nobody notices for months.** Each answers a different question, and each says
 plainly what it cannot see.
 
@@ -143,6 +143,7 @@ plainly what it cannot see.
 | [attest][] | did this job run, and did it produce what it claimed? | it sees declared outputs, not whether they are *correct* |
 | [flatline][] | is this data still carrying information? | it waits to be asked |
 | [watchpost][] | did an output go stale between runs? | it watches files, not the work that made them |
+| [custody][] | what did the AI actually do, and was it right? | it cannot see inside the model, and never claims an answer was true |
 
 They share one hash chain and one signature implementation, imported rather
 than copied — two versions of a trust primitive diverge the first time only one
@@ -154,6 +155,7 @@ overlap that is real, and the date we have committed to settling it.
 [attest]: https://github.com/automatedworkflowllc-design/attest
 [flatline]: https://github.com/automatedworkflowllc-design/flatline
 [watchpost]: https://github.com/automatedworkflowllc-design/watchpost
+[custody]: https://github.com/automatedworkflowllc-design/custody
 
 
 ---
