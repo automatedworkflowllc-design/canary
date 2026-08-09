@@ -234,8 +234,12 @@ def test_expected_constant_columns_are_set_aside_but_never_silently(tmp_path):
     out = tmp_path / 'r.html'
     canary.render(results, out, [tmp_path], ignore_path=tmp_path / 'canary-ignore.txt')
     text = out.read_text(encoding='utf-8')
-    assert 'hidden as expected-constant: ruleset' in text
-    assert 'hidden as expected-constant: regime' in text
+    # "set aside", not "hidden": these columns are named on the line that
+    # announces them, so calling them hidden contradicted both the footer and
+    # the observable behaviour. Pinned here so the wording cannot drift back.
+    assert 'set aside as expected-constant: ruleset' in text
+    assert 'set aside as expected-constant: regime' in text
+    assert 'hidden as expected-constant' not in text
     assert 'canary-ignore.txt' in text, 'the report must say how to change this'
 
 

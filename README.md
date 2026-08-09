@@ -94,6 +94,34 @@ A corrupt state file re-examines everything rather than concluding "nothing
 changed" forever, and a deleted file stops being reported rather than lingering
 as a status nobody can act on.
 
+## canary-ignore.txt — the setting you will want on day two
+
+Some columns are constant *on purpose*: a ruleset version, a region code, a
+format tag. Nothing in the data can tell canary which ones those are — only the
+person who owns the file knows. On the first real folder we pointed canary at,
+two such columns produced two thirds of every finding, every night.
+
+So you say it once, in a plain text file you can open and read:
+
+```
+# canary-ignore.txt — columns that are supposed to be constant
+# one per line; everything after a # is a comment
+
+ruleset_version   # pinned on purpose, changes only on release
+regime_code       # single-regime export
+export_format
+```
+
+It is read from `canary-ignore.txt` beside the state file, and the report prints
+the exact path it looked at. The same names can be passed with `--ignore`
+(comma-separated).
+
+**Set aside, not hidden.** Ignored findings are still counted and named in the
+report — a file whose findings are all ignored reads as clean but still says
+what was set aside. A checker that quietly stops mentioning things is the exact
+failure this tool is pointed at, and it would be a strange thing to build into
+the tool itself.
+
 ## Exit codes
 
 | code | meaning |

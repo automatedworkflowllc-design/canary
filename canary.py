@@ -343,7 +343,11 @@ def render(results, out_path: pathlib.Path, roots, checked=(), ignore_path=None)
         detail = html.escape(res.get('detail', '')) or _plain_detail(res)
         if res.get('hidden'):
             cols = ', '.join(html.escape(c) for c in sorted(set(res['hidden'])))
-            detail += (f'<br><span class="hid">{len(res["hidden"])} finding(s) hidden as '
+            # "set aside", never "hidden" -- they are printed on this very line,
+            # and the footer already calls it setting aside. Saying "hidden" both
+            # contradicted the footer and described the opposite of what the
+            # feature does, which is the one thing this tool must not do.
+            detail += (f'<br><span class="hid">{len(res["hidden"])} finding(s) set aside as '
                        f'expected-constant: {cols}</span>')
         new = ('<span class="new">new since last look</span>'
                if badge_useful and path in checked else '')
